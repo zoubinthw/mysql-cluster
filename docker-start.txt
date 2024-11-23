@@ -1,0 +1,78 @@
+docker network create mysql_cluster
+docker run --name mysql-master --network mysql_cluster -v /home/binzou/mysql-cluster/master/conf:/etc/mysql -p 30031:3306 -e MYSQL_ROOT_PASSWORD=ap -d mysql:oraclelinux9
+docker run --name mysql-salve --network mysql_cluster -v /home/binzou/mysql-cluster/salve/conf:/etc/mysql -p 30032:3306 -e MYSQL_ROOT_PASSWORD=ap -d mysql:oraclelinux9
+in master node:
+ALTER USER 'replication_user'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'replication_password';
+GRANT REPLICATION SLAVE ON *.* TO 'replication_user'@'%';
+FLUSH PRIVILEGES;
+SHOW MASTER STATUS;
+
+
+mysql-bin.000003 |      872
+172.18.0.2 master
+
+
+CHANGE MASTER TO
+  MASTER_HOST='172.18.0.2',
+  MASTER_USER='replica_user',
+  MASTER_PASSWORD='replica_password',
+  MASTER_LOG_FILE='mysql-bin.000003',
+  MASTER_LOG_POS=872;
+
+START SLAVE;
+-------------------step by step------------------------------------------------------
+1.mkdir some mount file
+mkdir -p ~/mysql-cluster/master/data ~/mysql-cluster/master/conf
+mkdir -p ~/mysql-cluster/slave/data ~/mysql-cluster/slave/conf
+Can mount dir into docker config dir, not onle file
+
+2.master & salve config
+master:
+[mysqld]
+server-id=1
+log-bin=mysql-bin
+binlog-format=row
+salve:
+[mysqld]
+server-id=2
+relay-log=relay-log
+3.write docker compost file
+
+4.start cluster
+docker compose up -d
+
+5.config master & salve
+docker exec -it mysql-master mysql -uroot -prootpassword
+run command:
+CREATE USER 'replica_user'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'replica_password';
+GRANT REPLICATION SLAVE ON *.* TO 'replica_user'@'%';
+FLUSH PRIVILEGES;
+SHOW MASTER STATUS; // Note the File (e.g., mysql-bin.000001) and Position (e.g., 154) values
+
+
+6.docker exec -it mysql-slave mysql -uroot -prootpassword
+run command:
+CHANGE MASTER TO
+  MASTER_HOST='172.18.0.2',
+  MASTER_USER='replica_user',
+  MASTER_PASSWORD='replica_password',
+  MASTER_LOG_FILE='mysql-bin.000003',
+  MASTER_LOG_POS=843;
+
+START SLAVE;
+valified:
+SHOW SLAVE STATUS\G
+\\ Ensure Slave_IO_Running and Slave_SQL_Running are both Yes.
+
+
+7.valified:
+docker exec -it mysql-master mysql -uroot -prootpassword
+USE testdb;
+CREATE TABLE example (id INT PRIMARY KEY, data VARCHAR(100));
+INSERT INTO example (id, data) VALUES (1, 'Hello from Master!');
+
+docker exec -it mysql-slave mysql -uroot -prootpassword
+USE testdb;
+SELECT * FROM example;
+
+
